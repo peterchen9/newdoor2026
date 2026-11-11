@@ -1,0 +1,21 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:3900:3900"
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      PHOTO_DIR: /door_photo
+    volumes:
+      - ./data:/data
+      - ./door_photo:/door_photo
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3900/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
