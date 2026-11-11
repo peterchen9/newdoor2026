@@ -1,3 +1,4 @@
+import { summarizeAudioStats } from './audio-stats.js';
 const $ = id => document.getElementById(id);
 const role = location.pathname.slice(1);
 if (['door', 'host'].includes(role)) {
@@ -8,12 +9,16 @@ if (['door', 'host'].includes(role)) {
   $('history').hidden = role !== 'host';
   $('login').hidden = role === 'door'; $('pairLogin').hidden = role !== 'door'; $('phoneSettings').hidden = role !== 'door';
   let ws, token, call, pc, local, remote, pending = [], signalQueue = Promise.resolve(), captureTimers = [], failureTimer, photoUrls = [], connecting = false, generation = 0, chime, onlineState = {}, authenticated = false, wakeLock, keepAwake = false, pairTimer;
+  let audioTimer, audioBaseline = new Map(), audioMetrics = {}, samplingAudio = false, lastAudioLog = 0, videoPaused = false;
   const say = text => { $('notice').textContent = text; };
   const send = (type, more = {}) => { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type, callId: call?.id, ...more })); };
   const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
   function cleanup() {
     generation++;
     clearTimeout(failureTimer); captureTimers.forEach(clearTimeout); captureTimers = [];
+    clearInterval(audioTimer); audioTimer = null; audioBaseline = new Map(); audioMetrics = {}; lastAudioLog = 0;
+    $('audioQuality').textContent = '通話時顯示接收品質'; $('markAudio').hidden = true; $('muteMic').hidden = true;
+    videoPaused = false; $('pauseVideo').hidden = true; $('pauseVideo').textContent = '暫停上傳影像';
     if (pc) { pc.onconnectionstatechange = null; pc.close(); pc = null; }
     local?.getTracks().forEach(t => t.stop()); local = null; remote = null; pending = [];
     $('video').srcObject = null; $('remoteAudio').srcObject = null; $('placeholder').hidden = false; $('play').hidden = true;
@@ -32,6 +37,27 @@ if (['door', 'host'].includes(role)) {
     $('answer').hidden = role !== 'host' || call?.status !== 'ringing';
     $('unlock').hidden = role !== 'host' || !active;
     $('hangup').hidden = !active;
+    $('markAudio').hidden = call?.status !== 'connected';
+    $('muteMic').hidden = call?.status !== 'connected';
+    $('muteMic').textContent = local?.getAudioTracks()[0]?.enabled === false ? '恢復本端麥克風' : '暫停本端麥克風';
+    $('pauseVideo').hidden = role !== 'door' || call?.status !== 'connected';
+  }
+  function logAudio(event, extra = {}) {
+    if (!call) return;
+    send('diagnostic', { message: JSON.stringify({ event, ...audioMetrics, paused: $('remoteAudio').paused, muted: local?.getAudioTracks()[0]?.enabled === false, videoPaused, ...extra }) });
+  }
+  async function sampleAudio() {
+    if (!pc || !call || samplingAudio) return;
+    const current = pc, id = call.id; samplingAudio = true;
+    try {
+      const report = await current.getStats();
+      if (pc !== current || call?.id !== id) return;
+      const result = summarizeAudioStats(report, audioBaseline); audioBaseline = result.baseline; audioMetrics = result.metrics;
+      const value = (key, unit) => audioMetrics[key] == null ? '未提供' : `${audioMetrics[key]}${unit}`;
+      $('audioQuality').textContent = `${role === 'door' ? '電腦 → 手機' : '手機 → 電腦'}：掉包 ${value('lossPct', '%')} · 補音 ${value('concealPct', '%')} · 抖動 ${value('jitterMs', 'ms')} · 緩衝 ${value('bufferMs', 'ms')}`;
+      if (call.status === 'connected' && Date.now() - lastAudioLog >= 5000) { lastAudioLog = Date.now(); logAudio('audio_stats'); }
+    } catch { $('audioQuality').textContent = '此瀏覽器無法提供音訊統計'; }
+    finally { samplingAudio = false; }
   }
   async function play() {
     try { await $('remoteAudio').play(); $('play').hidden = true; }
@@ -42,9 +68,10 @@ if (['door', 'host'].includes(role)) {
     const current = new RTCPeerConnection({ iceServers: [] }); pc = current;
     current.onicecandidate = e => { if (e.candidate) send('signal', { payload: { candidate: e.candidate.toJSON() } }); };
     current.ontrack = e => {
-      remote ||= new MediaStream(); remote.addTrack(e.track);
-      if (role === 'host' && e.track.kind === 'video') { $('video').srcObject = remote; $('placeholder').hidden = true; }
-      $('remoteAudio').srcObject = remote; play();
+      if (e.track.kind === 'video' && role === 'host') { $('video').srcObject = new MediaStream([e.track]); $('placeholder').hidden = true; }
+      if (e.track.kind === 'audio') {
+        remote = new MediaStream([e.track]); $('remoteAudio').srcObject = remote; play();
+      }
     };
     current.onconnectionstatechange = () => {
       clearTimeout(failureTimer);
@@ -54,6 +81,7 @@ if (['door', 'host'].includes(role)) {
       }
     };
     if (role === 'door' && local) local.getTracks().forEach(t => current.addTrack(t, local));
+    audioTimer = setInterval(sampleAudio, 2000);
     return current;
   }
   async function signal(m) {
@@ -94,6 +122,10 @@ if (['door', 'host'].includes(role)) {
           const was = call; call = m.call;
           authenticated = true; $('login').hidden = true; $('pairLogin').hidden = true; $('token').value = ''; $('pairCode').value = ''; $('connection').textContent = '● 已連線'; $('relay').textContent = m.relay === 'mock' ? 'MOCK / 模擬電鎖' : 'HTTP / 實體控制器';
           render(m.online);
+          if (call?.status === 'connected' && was?.status !== 'connected') {
+            const track = local?.getAudioTracks()[0], settings = track?.getSettings() || {};
+            logAudio('audio_settings', { aec: settings.echoCancellation, ns: settings.noiseSuppression, agc: settings.autoGainControl, rate: settings.sampleRate });
+          }
           if (!call && was) cleanup();
           if (!call && !was) say('已就緒，等待來訪。');
           if (call && !was && role === 'host') {
@@ -110,7 +142,7 @@ if (['door', 'host'].includes(role)) {
           await p.setLocalDescription(await p.createOffer()); send('signal', { payload: { description: p.localDescription } });
         }
         if (m.type === 'signal') signalQueue = signalQueue.then(() => signal(m)).catch(e => { say(`影音協商失敗：${e.message}`); send('diagnostic', { message: e.message }); send('hangup'); });
-        if (m.type === 'answered') { local?.getAudioTracks().forEach(t => { t.enabled = true; }); say('對方已接聽，現在可以通話。'); }
+        if (m.type === 'answered') { local?.getAudioTracks().forEach(t => { t.enabled = true; }); render(); say('對方已接聽，現在可以通話。'); }
         if (m.type === 'ended') { call = null; cleanup(); render(); say(m.reason === 'unlock_requested' ? '通話已結束，正在處理開門命令。' : m.contact); }
         if (['error', 'notice'].includes(m.type)) { say(m.text); if (m.type === 'error' && !call) cleanup(); }
       } catch (e) { say(e.message); send('diagnostic', { message: e.message }); send('hangup'); cleanup(); }
@@ -186,6 +218,26 @@ if (['door', 'host'].includes(role)) {
   $('unlock').onclick = () => { send('unlock'); cleanup(); $('unlock').hidden = true; };
   $('hangup').onclick = () => { send('hangup'); cleanup(); };
   $('play').onclick = play;
+  $('markAudio').onclick = () => { logAudio('audio_mark'); say('已記錄此刻的音訊品質，請繼續通話。'); };
+  $('muteMic').onclick = () => {
+    const track = local?.getAudioTracks()[0]; if (!track) return;
+    track.enabled = !track.enabled; logAudio('mic_toggle'); render();
+  };
+  $('pauseVideo').onclick = async () => {
+    const current = pc, id = call?.id, track = local?.getVideoTracks()[0];
+    const sender = current?.getSenders().find(s => s.track?.kind === 'video');
+    // Keep the sender handle while replaceTrack(null) temporarily detaches its track.
+    const videoSender = sender || current?.getTransceivers().find(t => t.receiver.track.kind === 'video')?.sender;
+    if (!videoSender || !track) return;
+    $('pauseVideo').disabled = true;
+    try {
+      await videoSender.replaceTrack(videoPaused ? track : null);
+      if (pc !== current || call?.id !== id) return;
+      videoPaused = !videoPaused; $('pauseVideo').textContent = videoPaused ? '恢復上傳影像' : '暫停上傳影像';
+      logAudio('video_toggle'); say(videoPaused ? '已暫停影像上傳，語音繼續。請比較聲音是否恢復順暢。' : '已恢復影像上傳。');
+    } catch (e) { if (call?.id === id) say(`無法切換影像上傳：${e.message}`); }
+    finally { $('pauseVideo').disabled = false; }
+  };
   const labels = { pair_code_created: '產生手機配對碼', phone_paired: '手機配對', photos_incomplete: '照片不足三張', ring: '按鈴', answered: '接聽', call_ended: '結束通話', photo_saved: '照片存檔', unlock_requested: '要求開門', relay_simulated: '模擬繼電器', relay_acknowledged: '繼電器確認', relay_unknown: '開門結果未知', connected: '連線', disconnected: '離線', diagnostic: '異常診斷', server_started: '系統啟動' };
   $('refresh').onclick = async () => {
     try {

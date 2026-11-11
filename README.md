@@ -53,4 +53,6 @@ docker run --rm --mount "type=bind,source=$($PWD.Path),target=/app" -w /app node
 
 ## 架構與硬體
 
+若發生單向聲音斷續，請參照 [音訊排查](docs/audio-troubleshooting.md)。新版通話時會記錄收送品質摘要，並提供斷音時間標記與麥克風暫停比較；不錄製聲音。
+
 詳見 [架構與硬體建議](docs/architecture.md) 與 [驗收清單](docs/acceptance.md)。尚未整合 SIP 門口機、GPIO 或廠牌專屬 relay API；generic HTTP adapter 只是明確的擴充契約，不能直接當作 Axis／2N 的 API 使用。

@@ -120,7 +120,7 @@ export async function createApp(options = {}) {
         const buffer = await readFile(join(photoDir, url.pathname.split('/').at(-1)));
         res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store' }); return res.end(buffer);
       }
-      const files = { '/': 'index.html', '/door': 'index.html', '/host': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css' };
+      const files = { '/': 'index.html', '/door': 'index.html', '/host': 'index.html', '/app.js': 'app.js', '/audio-stats.js': 'audio-stats.js', '/style.css': 'style.css' };
       if (req.method === 'GET' && files[url.pathname]) {
         const file = files[url.pathname];
         res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html; charset=utf-8');
@@ -185,7 +185,7 @@ export async function createApp(options = {}) {
           if (!m.payload || !['description', 'candidate'].some(k => k in m.payload)) throw Error('Invalid signal');
           send(role === 'door' ? 'host' : 'door', { type: 'signal', callId: active.id, payload: m.payload }); return;
         }
-        if (m.type === 'diagnostic') { log(role, 'diagnostic', { message: String(m.message).slice(0, 300) }); return; }
+        if (m.type === 'diagnostic') { log(role, 'diagnostic', { message: String(m.message).slice(0, 1200) }); return; }
         throw Error('不允許此操作');
       } catch (e) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'error', text: e.message })); }
     });
