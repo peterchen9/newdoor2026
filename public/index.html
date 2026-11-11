@@ -3,6 +3,7 @@
 <body><header><a href="/">ND<span>NEWDOOR / 2026</span></a><span id="connection">尚未連線</span></header>
 <main><section id="welcome"><p class="eyebrow">LOCAL ACCESS CONTROL</p><h1>讓每一次來訪，<br>有清楚的回應。</h1><p class="muted">電腦接待，手機按鈴。按需啟動影音，結束即釋放。</p><div class="roles"><a class="card" href="/host"><b>01 / 電腦主機端</b><h2>接待與開門 ↗</h2><p>查看來訪畫面、接聽對話、產生手機配對碼、查閱記錄。</p></a><a class="card" href="/door"><b>02 / 手機門口端</b><h2>來訪與按鈴 ↗</h2><p>Android 或 iPhone 以配對碼連線，使用手機鏡頭與麥克風。</p></a></div></section>
 <section id="console" hidden><div class="title"><div><p class="eyebrow" id="roleLabel"></p><h1 id="heading"></h1></div><span class="badge" id="relay">MOCK RELAY</span></div>
+<p id="testMode" class="eyebrow" hidden>測試模式 · 免金鑰／免配對碼</p><button id="testConnect" class="secondary" hidden>重新連線</button>
 <form id="login"><label>此端連線金鑰<input id="token" type="password" required minlength="24" autocomplete="off" placeholder="輸入 .env 中對應的 TOKEN"></label><button>連線</button></form>
 <form id="pairLogin" hidden><label>手機配對碼<input id="pairCode" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="off" placeholder="輸入主機顯示的 6 位數字"></label><button>配對並連線</button></form>
 <div id="phoneSettings" class="phone-settings" hidden><label>門口鏡頭<select id="camera"><option value="user">前鏡頭（螢幕朝向訪客）</option><option value="environment">後鏡頭（拍攝螢幕另一側）</option></select></label><button id="wake" class="secondary">保持螢幕開啟</button><span id="wakeStatus">請讓此頁維持前景</span></div>

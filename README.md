@@ -4,6 +4,8 @@
 
 **目前採用電腦＋手機方案**：電腦跑 Docker 與接聽網頁，Android Chrome／iPhone Safari 當門口端。已提供區網 HTTPS、一次性 6 位配對碼、前後鏡頭選擇與螢幕保持功能。完整步驟見 [手機設定](docs/phone-setup.md)。
 
+測試時可在 `.env` 設定 `TEST_NO_AUTH=true`，重新啟動 Docker 後，主機／手機網頁會直接連線，不必輸入金鑰或配對碼。此模式讓可連到服務的人直接使用主機操作與查閱記錄；測試完改回 `false` 並重啟即可恢復驗證。版本庫範本預設為 `false`。
+
 ## 啟動
 
 需要 Docker Desktop（Linux containers）。在 PowerShell 執行：

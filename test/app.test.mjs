@@ -10,7 +10,7 @@ import { createApp } from '../server.mjs';
 const HOST_TOKEN = 'host-test-abcdefghijklmnopqrstuvwxyz', DOOR_TOKEN = 'door-test-abcdefghijklmnopqrstuvwxyz';
 async function setup(t, config = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'newdoor-'));
-  const app = await createApp({ HOST_TOKEN, DOOR_TOKEN, DATA_DIR: dir, PHOTO_DIR: join(dir, 'photos'), RELAY_MODE: 'mock', ...config });
+  const app = await createApp({ HOST_TOKEN, DOOR_TOKEN, TEST_NO_AUTH: 'false', DATA_DIR: dir, PHOTO_DIR: join(dir, 'photos'), RELAY_MODE: 'mock', ...config });
   app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
   const base = `http://127.0.0.1:${app.server.address().port}`;
   t.after(async () => { await app.close(); await rm(dir, { recursive: true, force: true }); });
@@ -127,4 +127,26 @@ test('generating another code invalidates the previous code and guesses are thro
   assert.equal((await redeem(first)).status, 401);
   for (let i = 0; i < 29; i++) await redeem('xxxxxx');
   assert.equal((await redeem(second)).status, 429);
+});
+
+test('explicit test mode works without keys or pairing and preserves role and replay checks', async t => {
+  const a = await setup(t, { TEST_NO_AUTH: 'true', HOST_TOKEN: '', DOOR_TOKEN: '' });
+  assert.deepEqual(await (await fetch(`${a.base}/api/config`)).json(), { testNoAuth: true });
+  assert.equal((await fetch(`${a.base}/api/pair-code`, { method: 'POST' })).status, 404);
+  assert.equal((await fetch(`${a.base}/api/events`)).status, 200);
+  const host = await a.connect('host', ''), door = await a.connect('door', '');
+  const id = await a.ring(door);
+  const photo = await fetch(`${a.base}/api/photos/${id}/0`, { method: 'POST', body: Buffer.from([255,216,255,217]) });
+  assert.equal(photo.status, 201);
+  door.sendJson({ type: 'unlock', callId: id }); await door.wait(m => m.type === 'error');
+  host.sendJson({ type: 'unlock', callId: id }); await host.wait(m => m.type === 'notice');
+  host.sendJson({ type: 'unlock', callId: id }); await host.wait(m => m.type === 'error');
+  assert.equal(a.db.prepare("SELECT COUNT(*) AS n FROM events WHERE action='relay_simulated'").get().n, 1);
+  const invalid = await a.connect('admin', ''); assert.equal((await once(invalid, 'close'))[0], 4003);
+});
+
+test('authentication remains required when the test flag is absent or false', async t => {
+  const a = await setup(t);
+  assert.deepEqual(await (await fetch(`${a.base}/api/config`)).json(), { testNoAuth: false });
+  assert.equal((await fetch(`${a.base}/api/events`)).status, 401);
 });

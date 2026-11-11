@@ -8,8 +8,9 @@ import { WebSocketServer, WebSocket } from 'ws';
 
 export async function createApp(options = {}) {
   const env = { ...process.env, ...options };
+  const testNoAuth = env.TEST_NO_AUTH === 'true';
   const tokens = { host: env.HOST_TOKEN, door: env.DOOR_TOKEN };
-  if (Object.values(tokens).some(t => !t || t.length < 24) || tokens.host === tokens.door) throw Error('Set distinct HOST_TOKEN and DOOR_TOKEN, minimum 24 characters');
+  if (!testNoAuth && (Object.values(tokens).some(t => !t || t.length < 24) || tokens.host === tokens.door)) throw Error('Set distinct HOST_TOKEN and DOOR_TOKEN, minimum 24 characters');
   const integer = (key, fallback, min, max) => {
     const n = Number(env[key] ?? fallback);
     if (!Number.isInteger(n) || n < min || n > max) throw Error(`Invalid ${key}`);
@@ -35,7 +36,7 @@ export async function createApp(options = {}) {
   function log(actor, action, detail = {}, callId = active?.id) {
     db.prepare('INSERT INTO events(at,call_id,actor,action,detail) VALUES(?,?,?,?,?)').run(new Date().toISOString(), callId || null, actor, action, JSON.stringify(detail));
   }
-  log('system', 'server_started', { relay: mode, previousCallsClosed: true });
+  log('system', 'server_started', { relay: mode, testNoAuth, previousCallsClosed: true });
   const send = (role, msg) => { const p = peers.get(role); if (p?.readyState === WebSocket.OPEN) p.send(JSON.stringify(msg)); };
   const state = () => ({ type: 'state', call: active && { id: active.id, status: active.status, at: active.at }, online: { door: peers.has('door'), host: peers.has('host') }, relay: mode });
   const broadcast = () => { for (const role of peers.keys()) send(role, state()); };
@@ -53,6 +54,7 @@ export async function createApp(options = {}) {
   function authorize(req, role) {
     const value = (req.headers.authorization || '').replace(/^Bearer /, '');
     if (!['host', 'door'].includes(role)) return false;
+    if (testNoAuth) return true;
     if (role === 'door' && phoneSessions.get(value) > Date.now()) return true;
     return Buffer.byteLength(value) === Buffer.byteLength(tokens[role]) && timingSafeEqual(Buffer.from(value), Buffer.from(tokens[role]));
   }
@@ -69,6 +71,8 @@ export async function createApp(options = {}) {
     try {
       const url = new URL(req.url, 'http://localhost');
       if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true });
+      if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { testNoAuth });
+      if (testNoAuth && ['/api/pair-code', '/api/pair'].includes(url.pathname)) return json(res, 404, { error: '測試模式不需要配對' });
       if (req.method === 'POST' && url.pathname === '/api/pair-code') {
         if (!authorize(req, 'host')) return json(res, 401, { error: 'Unauthorized' });
         pairing = { code: String(randomInt(0, 1000000)).padStart(6, '0'), expiresAt: Date.now() + pairMs, attempts: 0 };

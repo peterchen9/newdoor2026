@@ -1,6 +1,7 @@
 const $ = id => document.getElementById(id);
 const role = location.pathname.slice(1);
 if (['door', 'host'].includes(role)) {
+  let testNoAuth = false;
   $('welcome').hidden = true; $('console').hidden = false;
   $('roleLabel').textContent = role === 'door' ? 'DOOR / 手機門口端' : 'HOST / 電腦主機端';
   $('heading').textContent = role === 'door' ? '歡迎來訪' : '門口接待控制台';
@@ -24,7 +25,9 @@ if (['door', 'host'].includes(role)) {
     $('online').textContent = `門口 ${online.door ? '●' : '○'} / 主機 ${online.host ? '●' : '○'}`;
     $('ring').hidden = role !== 'door'; $('ring').disabled = active || connecting || !authenticated;
     $('camera').disabled = active || connecting;
-    $('createPair').hidden = role !== 'host' || !authenticated;
+    $('createPair').hidden = testNoAuth || role !== 'host' || !authenticated;
+    $('testConnect').hidden = !testNoAuth || (role === 'door' && authenticated);
+    $('testConnect').textContent = authenticated ? '啟用提示音' : '重新連線';
     $('disconnect').hidden = !authenticated;
     $('answer').hidden = role !== 'host' || call?.status !== 'ringing';
     $('unlock').hidden = role !== 'host' || !active;
@@ -80,8 +83,8 @@ if (['door', 'host'].includes(role)) {
     } catch (e) { send('diagnostic', { message: `photo ${slot}: ${e.message}` }); say(`第 ${slot + 1} 張照片未存檔：${e.message}`); }
   }
   function connect(key) {
-    if (ws && ws.readyState < 2) return;
     if (role === 'host') { try { chime ||= new AudioContext(); chime.resume(); } catch {} }
+    if (ws && ws.readyState < 2) return;
     token = key; ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
     ws.onopen = () => ws.send(JSON.stringify({ type: 'auth', role, token }));
     ws.onmessage = async e => {
@@ -112,10 +115,11 @@ if (['door', 'host'].includes(role)) {
         if (['error', 'notice'].includes(m.type)) { say(m.text); if (m.type === 'error' && !call) cleanup(); }
       } catch (e) { say(e.message); send('diagnostic', { message: e.message }); send('hangup'); cleanup(); }
     };
-    ws.onclose = e => { authenticated = false; call = null; cleanup(); $('login').hidden = role === 'door'; $('pairLogin').hidden = role !== 'door'; $('connection').textContent = '○ 已離線'; clearInterval(pairTimer); $('pairOutput').textContent = ''; say(role === 'door' ? `已離線（${e.code}），請保持此頁在前景，並由主機產生新配對碼。` : `連線已關閉（${e.code}），請重新連線。`); render({}); };
+    ws.onclose = e => { authenticated = false; call = null; cleanup(); $('login').hidden = testNoAuth || role === 'door'; $('pairLogin').hidden = testNoAuth || role !== 'door'; $('connection').textContent = '○ 已離線'; clearInterval(pairTimer); $('pairOutput').textContent = ''; say(testNoAuth ? `已離線（${e.code}），請按「重新連線」。` : role === 'door' ? `已離線（${e.code}），請保持此頁在前景，並由主機產生新配對碼。` : `連線已關閉（${e.code}），請重新連線。`); render({}); };
     ws.onerror = () => say('無法連線主機。');
   }
   $('login').onsubmit = e => { e.preventDefault(); connect($('token').value); };
+  $('testConnect').onclick = () => { connect(); if (authenticated && role === 'host') say('已啟用提示音，等待來訪。'); };
   $('pairLogin').onsubmit = async e => {
     e.preventDefault(); const button = $('pairLogin').querySelector('button'); button.disabled = true;
     try {
@@ -211,4 +215,10 @@ if (['door', 'host'].includes(role)) {
   window.addEventListener('pagehide', () => { cleanup(); ws?.close(); wakeLock?.release(); });
   if (role === 'door' && !window.isSecureContext) say('手機鏡頭需要受信任 HTTPS。請依手機設定說明安裝本機憑證，使用 https://電腦區網IP:3443/door。');
   render();
+  try {
+    const response = await fetch('/api/config');
+    if (!response.ok) throw Error('無法讀取連線設定，請重新整理');
+    const config = await response.json(); testNoAuth = config.testNoAuth === true;
+    if (testNoAuth) { $('login').hidden = true; $('pairLogin').hidden = true; $('testMode').hidden = false; connect(); render(); }
+  } catch (e) { say(e.message); }
 }
