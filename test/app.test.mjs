@@ -83,3 +83,48 @@ test('call duration is bounded and malformed uploads are rejected', async t => {
   host.sendJson({ type: 'answer', callId: id }); await door.wait(m => m.type === 'answered');
   assert.equal((await host.wait(m => m.type === 'ended')).reason, 'call_timeout');
 });
+
+test('phone pairing is host-only, single-use, door-only and supports photos', async t => {
+  const a = await setup(t);
+  const issue = headers => fetch(`${a.base}/api/pair-code`, { method: 'POST', headers });
+  assert.equal((await issue()).status, 401);
+  assert.equal((await issue({ Authorization: `Bearer ${DOOR_TOKEN}` })).status, 401);
+  const { code } = await (await issue({ Authorization: `Bearer ${HOST_TOKEN}` })).json();
+  assert.match(code, /^\d{6}$/);
+  const redeem = () => fetch(`${a.base}/api/pair`, { method: 'POST', body: JSON.stringify({ code }) });
+  const result = await redeem(); assert.equal(result.status, 201);
+  const session = await result.json(); assert.ok(session.token.length >= 24);
+  assert.equal((await redeem()).status, 401);
+  assert.equal((await fetch(`${a.base}/api/events`, { headers: { Authorization: `Bearer ${session.token}` } })).status, 401);
+  assert.equal((await issue({ Authorization: `Bearer ${session.token}` })).status, 401);
+  const door = await a.connect('door', session.token), id = await a.ring(door);
+  const photo = await fetch(`${a.base}/api/photos/${id}/0`, { method: 'POST', headers: { Authorization: `Bearer ${session.token}` }, body: Buffer.from([255,216,255,217]) });
+  assert.equal(photo.status, 201);
+  door.sendJson({ type: 'unlock', callId: id }); await door.wait(m => m.type === 'error');
+  const details = a.db.prepare('SELECT detail FROM events').all().map(e => e.detail).join('');
+  assert.ok(!details.includes(session.token)); assert.ok(!details.includes(code));
+});
+
+test('phone pairing expires and locks after five wrong attempts', async t => {
+  const a = await setup(t, { PAIR_SECONDS: '1' });
+  const issue = async () => (await (await fetch(`${a.base}/api/pair-code`, { method: 'POST', headers: { Authorization: `Bearer ${HOST_TOKEN}` } })).json()).code;
+  const redeem = code => fetch(`${a.base}/api/pair`, { method: 'POST', body: JSON.stringify({ code }) });
+  const first = await issue(); const wrong = first === '000000' ? '111111' : '000000';
+  for (let i = 0; i < 5; i++) assert.equal((await redeem(wrong)).status, 401);
+  assert.equal((await redeem(first)).status, 401);
+  const second = await issue();
+  await new Promise(r => setTimeout(r, 1050));
+  assert.equal((await redeem(second)).status, 401);
+});
+
+test('generating another code invalidates the previous code and guesses are throttled', async t => {
+  const a = await setup(t);
+  const issue = async () => (await (await fetch(`${a.base}/api/pair-code`, { method: 'POST', headers: { Authorization: `Bearer ${HOST_TOKEN}` } })).json()).code;
+  const first = await issue(); let second = await issue();
+  // In the rare case of the same random code, request another before checking invalidation.
+  while (second === first) second = await issue();
+  const redeem = code => fetch(`${a.base}/api/pair`, { method: 'POST', body: JSON.stringify({ code }) });
+  assert.equal((await redeem(first)).status, 401);
+  for (let i = 0; i < 29; i++) await redeem('xxxxxx');
+  assert.equal((await redeem(second)).status, 429);
+});

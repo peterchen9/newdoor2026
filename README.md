@@ -2,6 +2,8 @@
 
 單門、單接待主機的本機 Docker 原型。門口瀏覽器模擬設備，按鈴才開啟影音，接聽後雙向通話，開門時先終止影音，再送出獨立的限時開鎖命令。
 
+**目前採用電腦＋手機方案**：電腦跑 Docker 與接聽網頁，Android Chrome／iPhone Safari 當門口端。已提供區網 HTTPS、一次性 6 位配對碼、前後鏡頭選擇與螢幕保持功能。完整步驟見 [手機設定](docs/phone-setup.md)。
+
 ## 啟動
 
 需要 Docker Desktop（Linux containers）。在 PowerShell 執行：
@@ -21,7 +23,7 @@ docker compose ps
 
 預設 `RELAY_MODE=mock`，**不會操作任何實體電鎖**。測試連線金鑰保存在記憶體，不寫入網址、localStorage 或 Git。這是簡化的共享金鑰授權，尚未包含多使用者帳號與權限管理。
 
-只綁定 `127.0.0.1`，其他電腦無法直接連入。跨設備測試需另設受信任 HTTPS 反向代理、正確的 WebSocket upgrade / Host 轉送與內網防火牆；不要直接將目前的 HTTP 埠公開。瀏覽器攝影機只在 localhost 或受信任 HTTPS 可用，直接用 HTTP 區網 IP 不能測試攝影機。
+基本模式只綁定 `127.0.0.1`，手機請執行 `./scripts/start-phone.ps1` 啟動 Caddy 區網 HTTPS（TCP 3443），再依手機設定說明安裝公開根憑證與配對。攝影機需要 localhost 或受信任 HTTPS，HTTP 區網 IP 無法測試攝影機。手機須保持頁面前景，切換 App／鎖屏即斷線；這版不提供背景常駐。
 
 ## 已實作
 

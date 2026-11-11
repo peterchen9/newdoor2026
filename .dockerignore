@@ -3,3 +3,5 @@ node_modules
 .env
 data
 door_photo
+.env.phone
+phone-setup

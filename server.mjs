@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { readFile, mkdir, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID, randomInt, randomBytes, timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -28,6 +28,9 @@ export async function createApp(options = {}) {
     CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, at TEXT NOT NULL, call_id TEXT, actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS photos(call_id TEXT, slot INTEGER, filename TEXT UNIQUE, at TEXT, PRIMARY KEY(call_id,slot));`);
   const peers = new Map();
+  const phoneSessions = new Map();
+  let pairing, pairWindow = 0, pairAttempts = 0;
+  const pairMs = integer('PAIR_SECONDS', 120, 1, 300) * 1000;
   let active = null, timer, lastRing = 0;
   function log(actor, action, detail = {}, callId = active?.id) {
     db.prepare('INSERT INTO events(at,call_id,actor,action,detail) VALUES(?,?,?,?,?)').run(new Date().toISOString(), callId || null, actor, action, JSON.stringify(detail));
@@ -49,7 +52,9 @@ export async function createApp(options = {}) {
   const arm = ms => { clearTimeout(timer); timer = setTimeout(() => finish(active?.status === 'ringing' ? 'no_answer' : 'call_timeout'), ms); };
   function authorize(req, role) {
     const value = (req.headers.authorization || '').replace(/^Bearer /, '');
-    return !!tokens[role] && Buffer.byteLength(value) === Buffer.byteLength(tokens[role]) && timingSafeEqual(Buffer.from(value), Buffer.from(tokens[role]));
+    if (!['host', 'door'].includes(role)) return false;
+    if (role === 'door' && phoneSessions.get(value) > Date.now()) return true;
+    return Buffer.byteLength(value) === Buffer.byteLength(tokens[role]) && timingSafeEqual(Buffer.from(value), Buffer.from(tokens[role]));
   }
   const json = (res, code, body) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); };
   async function body(req, limit) {
@@ -64,6 +69,27 @@ export async function createApp(options = {}) {
     try {
       const url = new URL(req.url, 'http://localhost');
       if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true });
+      if (req.method === 'POST' && url.pathname === '/api/pair-code') {
+        if (!authorize(req, 'host')) return json(res, 401, { error: 'Unauthorized' });
+        pairing = { code: String(randomInt(0, 1000000)).padStart(6, '0'), expiresAt: Date.now() + pairMs, attempts: 0 };
+        log('host', 'pair_code_created', { expiresAt: pairing.expiresAt });
+        return json(res, 201, { code: pairing.code, expiresAt: pairing.expiresAt });
+      }
+      if (req.method === 'POST' && url.pathname === '/api/pair') {
+        if (Date.now() - pairWindow > 60000) { pairWindow = Date.now(); pairAttempts = 0; }
+        if (++pairAttempts > 30) return json(res, 429, { error: '嘗試過於頻繁，請一分鐘後再試。' });
+        const input = JSON.parse((await body(req, 128)).toString());
+        if (!pairing || pairing.expiresAt <= Date.now() || pairing.attempts >= 5) return json(res, 401, { error: '配對碼已失效，請由主機重新產生。' });
+        pairing.attempts++;
+        if (typeof input.code !== 'string' || !/^\d{6}$/.test(input.code) || !timingSafeEqual(Buffer.from(input.code), Buffer.from(pairing.code))) return json(res, 401, { error: '配對碼錯誤或已失效。' });
+        pairing = null;
+        for (const [key, until] of phoneSessions) if (until <= Date.now()) phoneSessions.delete(key);
+        if (phoneSessions.size >= 32) phoneSessions.delete(phoneSessions.keys().next().value);
+        const token = randomBytes(32).toString('hex'), expiresAt = Date.now() + 8 * 3600000;
+        phoneSessions.set(token, expiresAt);
+        log('door', 'phone_paired', { expiresAt });
+        return json(res, 201, { token, expiresAt });
+      }
       if (req.method === 'GET' && url.pathname === '/api/events') {
         if (!authorize(req, 'host')) return json(res, 401, { error: 'Unauthorized' });
         const before = Number(url.searchParams.get('before') || Number.MAX_SAFE_INTEGER);
@@ -109,7 +135,7 @@ export async function createApp(options = {}) {
     wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws));
   });
   wss.on('connection', ws => {
-    let role, alive = true;
+    let role, sessionTimer, alive = true;
     const authTimer = setTimeout(() => ws.close(4001, 'Authentication timeout'), 5000);
     ws.on('pong', () => { alive = true; });
     const heartbeat = setInterval(() => { if (!alive) return ws.terminate(); alive = false; ws.ping(); }, 10000);
@@ -120,6 +146,7 @@ export async function createApp(options = {}) {
           if (m.type !== 'auth' || !authorize({ headers: { authorization: `Bearer ${m.token || ''}` } }, m.role)) return ws.close(4003, 'Unauthorized');
           if (peers.has(m.role)) return ws.close(4009, 'Role already connected');
           role = m.role; clearTimeout(authTimer); peers.set(role, ws); log(role, 'connected'); broadcast();
+          if (role === 'door' && phoneSessions.has(m.token)) sessionTimer = setTimeout(() => ws.close(4001, 'Pair session expired'), Math.max(1, phoneSessions.get(m.token) - Date.now()));
           if (role === 'host' && active?.status === 'ringing') send('door', { type: 'preview', callId: active.id });
           return;
         }
@@ -159,7 +186,7 @@ export async function createApp(options = {}) {
       } catch (e) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'error', text: e.message })); }
     });
     ws.on('close', () => {
-      clearTimeout(authTimer); clearInterval(heartbeat);
+      clearTimeout(authTimer); clearTimeout(sessionTimer); clearInterval(heartbeat);
       if (role && peers.get(role) === ws) { peers.delete(role); log(role, 'disconnected'); finish('peer_disconnected'); broadcast(); }
     });
     ws.on('error', () => {});

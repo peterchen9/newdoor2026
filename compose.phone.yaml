@@ -1,0 +1,20 @@
+# Run via scripts/start-phone.ps1. The backend HTTP port stays loopback-only.
+services:
+  https:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "${LAN_IP:?Set LAN_IP in .env.phone}:3443:443/tcp"
+    environment:
+      LAN_IP: ${LAN_IP}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - phone_tls:/data
+      - phone_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    security_opt: ["no-new-privileges:true"]
+volumes:
+  phone_tls:
+  phone_config:

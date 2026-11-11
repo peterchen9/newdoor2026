@@ -1,0 +1,14 @@
+{
+    auto_https disable_redirects
+    admin off
+    skip_install_trust
+    default_sni {$LAN_IP}
+    servers {
+        protocols h1 h2
+    }
+}
+
+https://{$LAN_IP} {
+    tls internal
+    reverse_proxy app:3900
+}

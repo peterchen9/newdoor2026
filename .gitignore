@@ -3,3 +3,5 @@ node_modules/
 data/
 door_photo/
 *.log
+.env.phone
+phone-setup/
